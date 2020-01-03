@@ -18,13 +18,15 @@ type Module struct {
 	// time of index
 	Indexed string
 
-	// url to download from
-	RepoRoot *vcs.RepoRoot
-	// go.mod file
-	ModFile *modfile.File
-
 	// is the module proxied
 	Proxied bool
+	// go.mod file
+	ModFile    *modfile.File
+	ModFileErr error
+
+	// url to download from
+	RepoRoot *vcs.RepoRoot
+
 	// list of packages
 	Pkgs []Package
 	// list of module imports

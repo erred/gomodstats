@@ -3,7 +3,6 @@ package retrieve
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 
 	"github.com/seankhliao/gomodstats"
 )
@@ -11,19 +10,17 @@ import (
 // Index only queries the index to discover modules/versions
 func (c *Client) Index() (*gomodstats.Store, error) {
 	var since string
-	var cur, total int
-	var mods map[string][]gomodstats.Module
-	for cur == 2000 {
+	var mods = make(map[string][]gomodstats.Module)
+	for cur := 2000; cur == 2000; {
 		cur = 0
 		u := c.IndexUrl
 		if since != "" {
 			u += "?since=" + since
 		}
-		res, err := http.Get(u)
+		res, err := c.http.Get(u)
 		if err != nil {
 			return nil, fmt.Errorf("Index get %s: %w", u, err)
-		}
-		if res.StatusCode != 200 {
+		} else if res.StatusCode != 200 {
 			return nil, fmt.Errorf("Index get %s: status %d %s", u, res.StatusCode, res.Status)
 		}
 		defer res.Body.Close()
@@ -38,8 +35,9 @@ func (c *Client) Index() (*gomodstats.Store, error) {
 				Name:    ir.Path,
 				Version: ir.Version,
 				Indexed: ir.Timestamp,
+				Proxied: true,
 			})
-			cur, total, since = cur+1, total+1, ir.Timestamp
+			cur, since = cur+1, ir.Timestamp
 		}
 	}
 	return &gomodstats.Store{

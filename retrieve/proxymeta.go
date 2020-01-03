@@ -4,32 +4,36 @@ import (
 	"bytes"
 	"fmt"
 	"io/ioutil"
-	"net/http"
 	"sync"
 
+	"github.com/rs/zerolog/log"
 	"github.com/seankhliao/gomodstats"
 	"golang.org/x/mod/modfile"
-	"golang.org/x/tools/go/vcs"
 )
 
 // ProxyMeta fills in additional metadata from quering the module proxy
 // such as more versions,
 // modfile,
-// vcs
+// vcs (x)
 func (c *Client) ProxyMeta(store *gomodstats.Store) (*gomodstats.Store, []error) {
-	in, out := make(chan modVers, 100), make(chan modVers, 100)
-	errc := make(chan error, 100)
+	in, out := make(chan modVers, c.Parallel), make(chan modVers, c.Parallel)
+	errc := make(chan error, c.Parallel)
 	wg, collect := &sync.WaitGroup{}, &sync.WaitGroup{}
 
 	go func() {
+		var c int
 		for m, vers := range store.Mods {
+			c++
 			in <- modVers{m, vers}
+			if c%1000 == 0 {
+				log.Info().Int("current", c).Int("total", len(store.Mods)).Msg("progress")
+			}
 		}
 		close(in)
 	}()
 
-	wg.Add(100)
-	for i := 0; i < 100; i++ {
+	wg.Add(c.Parallel)
+	for i := 0; i < c.Parallel; i++ {
 		go c.getModuleMeta(in, out, errc, wg)
 	}
 	go func() {
@@ -77,12 +81,25 @@ func (c *Client) getModuleMeta(in, out chan modVers, errc chan error, wg *sync.W
 
 		// get modfile / vcs
 		nv := make([]gomodstats.Module, 0, len(vers))
+		nvc := make(chan gomodstats.Module, len(vers))
+		vwg := &sync.WaitGroup{}
+		vwg.Add(len(vers))
 		for v, m := range vers {
-			m, err := c.getModFile(v, m)
-			if err != nil {
-				errc <- err
-				continue
-			}
+			go func(v string, m gomodstats.Module) {
+				defer vwg.Done()
+				m, err := c.getModFile(v, m)
+				if err != nil {
+					errc <- err
+					return
+				}
+				nvc <- m
+			}(v, m)
+		}
+		go func() {
+			vwg.Wait()
+			close(nvc)
+		}()
+		for m := range nvc {
 			nv = append(nv, m)
 		}
 		out <- modVers{mv.name, nv}
@@ -91,11 +108,16 @@ func (c *Client) getModuleMeta(in, out chan modVers, errc chan error, wg *sync.W
 
 func (c *Client) getModuleVersions(mv modVers, vers map[string]gomodstats.Module) error {
 	u := fmt.Sprintf("%s/%s/@v/list", c.ProxyUrl, mv.name)
-	res, err := http.Get(u)
+	res, err := c.http.Get(u)
 	if err != nil {
 		return fmt.Errorf("getModuleVersions list %s: %w", mv.name, err)
-	}
-	if res.StatusCode != 200 {
+	} else if res.StatusCode == 410 {
+		for k, v := range vers {
+			v.Proxied = false
+			vers[k] = v
+		}
+		return nil
+	} else if res.StatusCode != 200 {
 		return fmt.Errorf("getModuleVersions list %s: %d %s", mv.name, res.StatusCode, res.Status)
 	}
 	defer res.Body.Close()
@@ -109,6 +131,7 @@ func (c *Client) getModuleVersions(mv modVers, vers map[string]gomodstats.Module
 			vers[string(v)] = gomodstats.Module{
 				Name:    mv.name,
 				Version: string(v),
+				Proxied: true,
 			}
 		}
 	}
@@ -117,11 +140,13 @@ func (c *Client) getModuleVersions(mv modVers, vers map[string]gomodstats.Module
 
 func (c *Client) getModFile(v string, m gomodstats.Module) (gomodstats.Module, error) {
 	u := fmt.Sprintf("%s/%s/@v/%s.mod", c.ProxyUrl, m.Name, v)
-	res, err := http.Get(u)
+	res, err := c.http.Get(u)
 	if err != nil {
 		return m, fmt.Errorf("getModFile modfile %s %s: %w", m.Name, v, err)
-	}
-	if res.StatusCode != 200 {
+	} else if res.StatusCode == 410 {
+		m.Proxied = false
+		return m, nil
+	} else if res.StatusCode != 200 {
 		return m, fmt.Errorf("getModFile modfile %s %s: %d %s", m.Name, v, res.StatusCode, res.Status)
 	}
 	defer res.Body.Close()
@@ -131,12 +156,29 @@ func (c *Client) getModFile(v string, m gomodstats.Module) (gomodstats.Module, e
 	}
 	m.ModFile, err = modfile.Parse(m.Name+"/@v/"+v+".mod", b, nil)
 	if err != nil {
-		return m, fmt.Errorf("getModFile parse %s %s: %w", m.Name, v, err)
+		m.ModFileErr = err
+		log.Warn().Str("mod", m.Name).Str("ver", v).Err(err).Msg("parse modfile")
 	}
-	m.RepoRoot, err = vcs.RepoRootForImportPath(m.Name, false)
-	if err != nil {
-		return m, fmt.Errorf("getModFile repo root %s %s: %w", m.Name, v, err)
-	}
+	// rr := make(chan *vcs.RepoRoot)
+	// errs := make(chan error)
+	// ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
+	// defer cancel()
+	// go func() {
+	// 	repoRoot, err := vcs.RepoRootForImportPath(m.Name, false)
+	// 	if err != nil {
+	// 		errs <- fmt.Errorf("getModFile repo root %s %s: %w", m.Name, v, err)
+	// 		return
+	// 	}
+	// 	rr <- repoRoot
+	// }()
+	// select {
+	// case m.RepoRoot = <-rr:
+	// 	// noop
+	// case err := <-errs:
+	// 	log.Error().Str("mod", m.Name).Str("ver", v).Err(err).Msg("repoRoot")
+	// case <-ctx.Done():
+	// 	log.Error().Str("mod", m.Name).Str("ver", v).Err(errors.New("timeout")).Msg("repoRoot")
+	// }
 	return m, nil
 }
 
