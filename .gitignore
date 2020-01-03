@@ -2,3 +2,5 @@ gomodstats
 getmeta
 metaparse
 !cmd/*
+
+proxymeta.json

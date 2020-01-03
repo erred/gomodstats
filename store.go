@@ -1,7 +1,7 @@
 package gomodstats
 
 import (
-	"golang.org/x/mod/modfile"
+	// "golang.org/x/mod/modfile"
 	"golang.org/x/tools/go/vcs"
 )
 
@@ -21,8 +21,8 @@ type Module struct {
 	// is the module proxied
 	Proxied bool
 	// go.mod file
-	ModFile    *modfile.File
-	ModFileErr error
+	// ModFile    *modfile.File
+	// ModFileErr error
 
 	// url to download from
 	RepoRoot *vcs.RepoRoot
