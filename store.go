@@ -1,5 +1,10 @@
 package gomodstats
 
+import (
+	"golang.org/x/mod/modfile"
+	"golang.org/x/tools/go/vcs"
+)
+
 type Store struct {
 	// map of module names to module versions
 	Mods map[string][]Module
@@ -14,14 +19,15 @@ type Module struct {
 	Indexed string
 
 	// url to download from
-	VcsUrl string
+	RepoRoot *vcs.RepoRoot
+	// go.mod file
+	ModFile *modfile.File
+
 	// is the module proxied
 	Proxied bool
 	// list of packages
 	Pkgs []Package
 	// list of module imports
-	ModImports []string
-	// list of subfolders
 	Folders []string
 }
 
