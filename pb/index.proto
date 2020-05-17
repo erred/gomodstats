@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package pb;
+option go_package = ".;pb";
+
+message Index {
+  repeated IndexRecord records = 1;
+}
+
+message IndexRecord {
+  string Path = 1;
+  string Version = 2;
+  string Timestamp = 3;
+}
+
+message Modules {
+  map<string, ModuleVersions> modules = 1;
+}
+
+message ModuleVersions {
+  repeated ModuleVersion versions = 1;
+}
+
+message ModuleVersion {
+  string version = 1;
+  string go = 2;
+  repeated Require requires = 3;
+  repeated Version excludes = 4;
+  repeated Replace replaces = 5;
+
+  map<string, int64> tokens = 6;
+  map<string, int64> idents = 7;
+}
+
+message Require {
+  Version version = 1;
+  bool indirect = 2;
+}
+message Replace {
+  Version old = 1;
+  Version new = 2;
+}
+
+message Version {
+  string module = 1;
+  string version = 2;
+}
