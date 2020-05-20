@@ -1,15 +1,16 @@
 package main
 
 import (
+	"archive/zip"
+	"bufio"
 	"bytes"
-	"encoding/csv"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -17,7 +18,6 @@ import (
 
 	"go.seankhliao.com/gomodstats/v2/pb"
 	"golang.org/x/mod/semver"
-	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -46,17 +46,20 @@ func main() {
 		log.Println(http.ListenAndServe(":6060", nil))
 	}()
 
-	// f, err := os.Create("error.log")
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// defer f.Close()
-	// log.SetOutput(io.MultiWriter(os.Stdout, f))
+	f, err := os.Create("error.log")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+	log.SetOutput(io.MultiWriter(os.Stdout, f))
 
-	// pbi, err := Index()
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
+	pbi, err := Index()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	BuildTags(pbi)
+
 	// Modules(pbi)
 
 	// idx := index()
@@ -64,188 +67,94 @@ func main() {
 	// versions(idx)
 
 	// latest(idx)
-	whousesweirdcaps()
+	// whousesweirdcaps()
 }
 
-func whousesweirdcaps() {
-	fis, err := ioutil.ReadDir("mods")
-	if err != nil {
-		log.Fatal(err)
-	}
-	for _, fi := range fis {
-		if fi.IsDir() {
-			continue
-		}
-
-		b, err := ioutil.ReadFile("mods/" + fi.Name())
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		var mv pb.ModuleVersion
-		err = proto.Unmarshal(b, &mv)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if _, ok := mv.Idents["iNdEx"]; ok {
-			fmt.Println("iNdEx: ", fi.Name())
-		}
-		if _, ok := mv.Idents["dAtA"]; ok {
-			fmt.Println("dAtA: ", fi.Name())
-		}
-	}
-}
-
-func latest(idx map[string][]pb.IndexRecord) {
-	govers := make(map[string]int64)
-	requires := make(map[string]int64)
-	replaces := make(map[string]int64)
-	excludes := make(map[string]int64)
-	tokens := make(map[string]int64)
-	tokendist := make(map[string]int64)
-	idents := make(map[string]int64)
-	identdist := make(map[string]int64)
-
-	for m := range idx {
-		ir := idx[m][len(idx[m])-1]
-
-		fn := fmt.Sprintf("%s/%s@%s.pb", "mods", strings.ReplaceAll(ir.Path, "/", "--"), ir.Version)
-		b, err := ioutil.ReadFile(fn)
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-
-		var mv pb.ModuleVersion
-		err = proto.Unmarshal(b, &mv)
-		if err != nil {
-			log.Fatal(err)
-		}
-		govers[mv.Go]++
-		requires[strconv.Itoa(len(mv.Requires))]++
-		replaces[strconv.Itoa(len(mv.Replaces))]++
-		excludes[strconv.Itoa(len(mv.Excludes))]++
-		var t int64
-		for tk, c := range mv.Tokens {
-			t += c
-			tokens[tk] += c
-		}
-		tokendist[strconv.FormatInt(t, 10)]++
-		var i int64
-		for id, c := range mv.Idents {
-			i += c
-			idents[id] += c
-		}
-		identdist[strconv.FormatInt(i, 10)]++
-	}
-
-	mapcsv("latest-govers.csv", govers)
-	mapcsv("latest-requires.csv", requires)
-	mapcsv("latest-replaces.csv", replaces)
-	mapcsv("latest-excludes.csv", excludes)
-	mapcsv("latest-tokenpop.csv", tokens)
-	mapcsv("latest-tokencount.csv", tokendist)
-	mapcsv("latest-identpop.csv", idents)
-	mapcsv("latest-identcount.csv", identdist)
-
-}
-
-func versions(idx map[string][]pb.IndexRecord) {
-	modvers := make(map[string]int64)
-	prerel := make(map[string]int64)
-	for _, irs := range idx {
-		modvers[strconv.Itoa(len(irs))]++
-		for _, ir := range irs {
-			prs := strings.Split(ir.Version, "-")
-			for i := 1; i < len(prs); i++ {
-				prerel[prs[i]]++
-			}
-		}
-	}
-
-	mapcsv("versions-dist.csv", modvers)
-	mapcsv("versions-prerelwords", prerel)
-}
-
-func hosting(idx map[string][]pb.IndexRecord) {
-	host := make(map[string]int64)
-	scm := make(map[string]int64)
-	vanity := make(map[string]int64)
-
-	hc := map[string]bool{
-		"github.com":         true,
-		"bitbucket.org":      true,
-		"hub.jazz.net":       true,
-		"git.apache.org":     true,
-		"git.openstack.org":  true,
-		"chiselapp.com":      true,
-		"code.launchpad.net": true,
-	}
-
-	for k := range idx {
-		h := strings.SplitN(k, "/", 2)
-		host[h[0]]++
-		if !hc[h[0]] {
-			if strings.Contains(k, ".git") {
-				scm["git"]++
-			} else if strings.Contains(k, ".hg") {
-				scm["hg"]++
-			} else if strings.Contains(k, ".svn") {
-				scm["svn"]++
-			} else if strings.Contains(k, ".bzr") {
-				scm["bzr"]++
-			} else if strings.Contains(k, ".fossil") {
-				scm["fossil"]++
-			} else {
-				vanity[h[0]]++
-			}
-		}
-	}
-	mapcsv("hosting-all.csv", host)
-	mapcsv("hosting-scm.csv", scm)
-	mapcsv("hosting-vanity", vanity)
-}
-
-func mapcsv(fn string, m map[string]int64) {
-	f, err := os.Create(fn)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer f.Close()
-
-	a := make([][]string, 0, len(m))
-	for k, v := range m {
-		a = append(a, []string{k, strconv.FormatInt(int64(v), 10)})
-	}
-	sort.Slice(a, func(i, j int) bool {
-		return a[i][0] < a[j][0]
-	})
-
-	w := csv.NewWriter(f)
-	defer w.Flush()
-	w.WriteAll(a)
-}
-
-func index() map[string][]pb.IndexRecord {
-	var pbi pb.Index
-	b, err := ioutil.ReadFile(chkptIndex)
-	if err != nil {
-		log.Fatal(err)
-	}
-	err = proto.Unmarshal(b, &pbi)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	m := make(map[string][]pb.IndexRecord, 180000)
+func BuildTags(pbi *pb.Index) {
+	mods := make(map[string][]string)
 	for _, ir := range pbi.Records {
-		m[ir.Path] = append(m[ir.Path], *ir)
+		mods[ir.Path] = append(mods[ir.Path], ir.Version)
 	}
-	for k := range m {
-		sort.Slice(m[k], func(i, j int) bool {
-			return semver.Compare(m[k][i].Version, m[k][j].Version) == -1
+	for _, v := range mods {
+		sort.Slice(v, func(i, j int) bool {
+			return semver.Compare(v[i], v[j]) == -1
 		})
 	}
 
-	return m
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, limit)
+	for i := 0; i < limit; i++ {
+		sem <- struct{}{}
+	}
+	c := make(chan string)
+	go func() {
+		f, err := os.Create("buildtags.txt")
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer f.Close()
+		for s := range c {
+			f.WriteString(s)
+			f.WriteString("\n")
+		}
+	}()
+
+	var i int
+	for m, v := range mods {
+		wg.Add(1)
+		<-sem
+		i++
+		if i%1000 == 0 {
+			log.Printf("progress %d/%d\n", i, len(mods))
+		}
+		go func(m, v string) {
+			buf := pool.Get().(*bytes.Buffer)
+			defer func() {
+				buf.Reset()
+				pool.Put(buf)
+				wg.Done()
+			}()
+
+			res, err := http.Get(fmt.Sprintf("%s/%s/@v/%s.zip", proxyURL, m, v))
+			if err != nil {
+				log.Printf("module get %s %s: %v", m, v, err)
+				return
+			} else if res.StatusCode != 200 {
+				log.Printf("module status %s %s: %d %s", m, v, res.StatusCode, res.Status)
+				return
+			}
+			defer res.Body.Close()
+			_, err = buf.ReadFrom(res.Body)
+			if err != nil {
+				log.Printf("module read %s %s: %v", m, v, err)
+				return
+			}
+			r, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			if err != nil {
+				log.Printf("module unzip %s %s: %v", m, v, err)
+				return
+			}
+			for _, zf := range r.File {
+				if filepath.Ext(zf.Name) != ".go" {
+					continue
+				}
+				rc, err := zf.Open()
+				if err != nil {
+					log.Printf("module open %s %s %s: %v", m, v, zf.Name, err)
+					return
+				}
+				sc := bufio.NewScanner(rc)
+				for sc.Scan() {
+					if !strings.HasPrefix(sc.Text(), "// +build") {
+						continue
+					}
+					c <- sc.Text()
+				}
+			}
+		}(m, v[len(v)-1])
+	}
+
+	wg.Wait()
+	close(c)
+
 }
