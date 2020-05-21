@@ -3,4 +3,5 @@ getmeta
 metaparse
 !cmd/*
 
+buildtags.txt
 proxymeta.json

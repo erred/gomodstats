@@ -28,7 +28,7 @@ const (
 
 	chkptIndex = "index.pb"
 
-	limit = 200
+	limit = 10
 )
 
 var (
