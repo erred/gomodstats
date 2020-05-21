@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	_ "net/http/pprof"
 
@@ -53,10 +54,10 @@ func main() {
 	// defer f.Close()
 	// log.SetOutput(io.MultiWriter(os.Stdout, f))
 
-	// pbi, err := Index()
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
+	pbi, err := Index()
+	if err != nil {
+		log.Fatal(err)
+	}
 	// Modules(pbi)
 
 	// idx := index()
@@ -64,7 +65,30 @@ func main() {
 	// versions(idx)
 
 	// latest(idx)
-	whousesweirdcaps()
+	// whousesweirdcaps()
+	timeofday(pbi)
+}
+
+func timeofday(pbi *pb.Index) {
+	s := make([]int, 60*24)
+	for _, r := range pbi.Records {
+		t, err := time.Parse(time.RFC3339Nano, r.Timestamp)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		s[t.Hour()*60+t.Minute()]++
+	}
+	f, err := os.Create("timeofday.csv")
+	if err != nil {
+		log.Fatal(err)
+	}
+	w := csv.NewWriter(f)
+	for d, c := range s {
+		w.Write([]string{fmt.Sprintf("%02d:%02d", d/60, d%60), strconv.Itoa(c)})
+	}
+	w.Flush()
+	f.Close()
 }
 
 func whousesweirdcaps() {
